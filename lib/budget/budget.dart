@@ -5,3 +5,6 @@ library;
 export 'budget_math.dart';
 export 'models.dart';
 export 'money.dart';
+export 'budget_rules.dart';
+export 'uuid.dart';
+export 'year_month.dart';

@@ -9,13 +9,13 @@ import '../state/budget_state.dart';
 import '../state/clock.dart';
 import '../state/confirmation_state.dart';
 import '../state/haptics.dart';
+import '../state/ledger.dart';
 import '../state/log_session_state.dart';
 import '../state/seed.dart';
 import '../state/timing_state.dart';
 import '../theme/tide_theme.dart';
 import 'amount.dart';
 import 'amount_ring.dart';
-import 'chips.dart';
 import 'number_pad.dart';
 import 'timing.dart';
 
@@ -47,6 +47,13 @@ class LogFlow extends ConsumerStatefulWidget {
   /// What is said when a pebble is tapped with no amount set.
   static const refusalMessage = 'Set an amount first';
 
+  /// What is said when the entry could not be saved.
+  static const saveFailedMessage = 'That could not be saved. Tap to try again.';
+
+  /// The same, for the home screen, when the flow was closed before the
+  /// save failed.
+  static const saveFailedNotice = 'Your entry could not be saved';
+
   /// The height of a pebble and of an income source.
   static const double cellHeight = 68;
 
@@ -65,6 +72,11 @@ class _LogFlowState extends ConsumerState<LogFlow> {
   bool _refused = false;
   Timer? _refusedTimer;
 
+  /// True from the filing tap until the save has failed. After a save that
+  /// worked it stays true while the flow closes.
+  bool _saving = false;
+  bool _saveFailed = false;
+
   @override
   void initState() {
     super.initState();
@@ -80,11 +92,13 @@ class _LogFlowState extends ConsumerState<LogFlow> {
   }
 
   void _setAmount(AmountEntry next) {
-    if (next == _amount && !_refused) return;
+    if (_saving) return;
+    if (next == _amount && !_refused && !_saveFailed) return;
     _refusedTimer?.cancel();
     setState(() {
       _amount = next;
       _refused = false;
+      _saveFailed = false;
     });
   }
 
@@ -112,65 +126,98 @@ class _LogFlowState extends ConsumerState<LogFlow> {
     return true;
   }
 
-  void _fileExpense(Category category) {
-    if (_refuseIfUnset()) return;
+  /// Saves through [save] and, only once that has finished, confirms with
+  /// [confirm] and closes. A second tap while the save is in flight does
+  /// nothing. If the save fails nothing was recorded: the flow stays open
+  /// with the amount as entered and says so.
+  Future<void> _file(
+    Future<Entry> Function() save,
+    void Function(Entry entry) confirm,
+  ) async {
+    if (_saving || _refuseIfUnset()) return;
+    // Read now: the flow may have been closed by the time the save answers.
+    final confirmations = ref.read(confirmationProvider.notifier);
+    final haptics = ref.read(hapticsProvider);
+    setState(() {
+      _saving = true;
+      _saveFailed = false;
+    });
+    final Entry entry;
+    try {
+      entry = await save();
+    } catch (_) {
+      haptics.refused();
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _saveFailed = true;
+        });
+      } else {
+        confirmations.notice(LogFlow.saveFailedNotice);
+      }
+      return;
+    }
+    confirm(entry);
+    haptics.success();
+    // _saving stays set: this opening of the flow has filed its entry, and a
+    // tap that lands before the flow has gone must not file another.
+    if (mounted) _close();
+  }
+
+  Future<void> _fileExpense(Category category) {
+    final budget = ref.read(budgetProvider.notifier);
+    final timings = ref.read(timingsProvider.notifier);
+    final confirmations = ref.read(confirmationProvider.notifier);
     final now = ref.read(clockProvider)();
     final typed = _note.text.trim();
-    final entry = ref
-        .read(budgetProvider.notifier)
-        .addExpense(
-          amountMinor: rupees(_amount.rupees),
-          categoryId: category.id,
-          note: typed.isEmpty ? category.name : typed,
-          occurredAt: now,
-        );
+    final amountMinor = rupees(_amount.rupees);
+    final method = _amount.method ?? AmountMethod.pad;
     final elapsed = now.difference(_openedAt);
-    ref
-        .read(timingsProvider.notifier)
-        .add(
-          TimingRecord(
-            entryId: entry.id,
-            method: _amount.method ?? AmountMethod.pad,
-            elapsed: elapsed,
-          ),
+    return _file(
+      () => budget.addExpense(
+        amountMinor: amountMinor,
+        categoryId: category.id,
+        note: typed.isEmpty ? category.name : typed,
+        occurredAt: now,
+      ),
+      (entry) {
+        timings.add(
+          TimingRecord(entryId: entry.id, method: method, elapsed: elapsed),
         );
-    ref
-        .read(confirmationProvider.notifier)
-        .entryRecorded(
+        confirmations.entryRecorded(
           entryId: entry.id,
           message:
               'Logged ${formatRupees(entry.amountMinor)} to ${category.name}',
           detail: formatSeconds(elapsed),
         );
-    ref.read(hapticsProvider).success();
-    _close();
+      },
+    );
   }
 
-  void _fileIncome(String source) {
-    if (_refuseIfUnset()) return;
+  Future<void> _fileIncome(String source) {
+    final budget = ref.read(budgetProvider.notifier);
+    final confirmations = ref.read(confirmationProvider.notifier);
+    final now = ref.read(clockProvider)();
     final typed = _note.text.trim();
-    final entry = ref
-        .read(budgetProvider.notifier)
-        .addIncome(
-          amountMinor: rupees(_amount.rupees),
-          note: typed.isEmpty ? source : typed,
-          occurredAt: ref.read(clockProvider)(),
-        );
-    ref
-        .read(confirmationProvider.notifier)
-        .entryRecorded(
-          entryId: entry.id,
-          message: 'Added ${formatRupees(entry.amountMinor)} from $source',
-        );
-    ref.read(hapticsProvider).success();
-    _close();
+    final amountMinor = rupees(_amount.rupees);
+    return _file(
+      () => budget.addIncome(
+        amountMinor: amountMinor,
+        note: typed.isEmpty ? source : typed,
+        occurredAt: now,
+      ),
+      (entry) => confirmations.entryRecorded(
+        entryId: entry.id,
+        message: 'Added ${formatRupees(entry.amountMinor)} from $source',
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(budgetProvider);
     final panel = ref.watch(entryPanelProvider);
-    final chips = frequentAmounts(state.entries);
+    final chips = ref.watch(frequentAmountsProvider);
     final media = MediaQuery.of(context);
     final padding = media.padding;
 
@@ -203,7 +250,12 @@ class _LogFlowState extends ConsumerState<LogFlow> {
                       alignment: Alignment.topCenter,
                       child: SizedBox(
                         width: width,
-                        child: _content(state, panel, chips, width),
+                        // Nothing in the flow answers while a save is in
+                        // flight.
+                        child: AbsorbPointer(
+                          absorbing: _saving,
+                          child: _content(state, panel, chips, width),
+                        ),
                       ),
                     ),
                   ),
@@ -239,6 +291,7 @@ class _LogFlowState extends ConsumerState<LogFlow> {
                   onChanged: (v) => setState(() {
                     _income = v;
                     _refused = false;
+                    _saveFailed = false;
                   }),
                   options: const [
                     (false, 'Spend', LogFlow.spendKey),
@@ -354,7 +407,9 @@ class _LogFlowState extends ConsumerState<LogFlow> {
         Semantics(
           liveRegion: true,
           child: Text(
-            _refused
+            _saveFailed
+                ? LogFlow.saveFailedMessage
+                : _refused
                 ? LogFlow.refusalMessage
                 : _income
                 ? 'Where did it come from?'
@@ -363,8 +418,12 @@ class _LogFlowState extends ConsumerState<LogFlow> {
             textAlign: TextAlign.center,
             style: TideText.body(
               size: 13,
-              weight: _refused ? FontWeight.w600 : FontWeight.w500,
-              color: _refused ? TideColors.coral : TideColors.muted,
+              weight: _refused || _saveFailed
+                  ? FontWeight.w600
+                  : FontWeight.w500,
+              color: _refused || _saveFailed
+                  ? TideColors.coral
+                  : TideColors.muted,
             ),
           ),
         ),

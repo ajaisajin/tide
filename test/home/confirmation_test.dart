@@ -3,9 +3,12 @@ import 'package:tide/budget/budget.dart';
 import 'package:tide/home/confirmation_toast.dart';
 import 'package:tide/log/log_flow.dart';
 import 'package:tide/state/confirmation_state.dart';
+import 'package:tide/state/ledger.dart';
 import 'package:tide/state/timing_state.dart';
+import 'package:tide/storage/storage.dart';
 import 'package:tide/vessel/vessel_layer.dart';
 
+import '../support/gated_ledger_store.dart';
 import '../support/log_helpers.dart';
 import '../support/pump_home.dart';
 
@@ -181,6 +184,95 @@ void main() {
       await tester.pump(const Duration(seconds: 10));
       await tester.pump();
       expect(undo, findsNothing);
+    });
+  });
+
+  group('undo and the saved ledger', () {
+    const oct = YearMonth(2026, 10);
+
+    Future<(LogHarness, GatedLedgerStore)> pumpGated(
+      WidgetTester tester,
+    ) async {
+      final store = GatedLedgerStore(
+        inner: MemoryLedgerStore.sampleMonth(oct5),
+      );
+      return (await pumpLogApp(tester, store: store), store);
+    }
+
+    testWidgets('after Undo the store no longer returns the entry', (
+      tester,
+    ) async {
+      final app = await pumpLogApp(tester);
+      await app.log('250', 'food');
+      final entry = app.entries.last;
+      expect(await app.store.entriesForMonth(oct), contains(entry));
+
+      await app.undo();
+
+      expect(await app.store.entriesForMonth(oct), isNot(contains(entry)));
+      expect(await app.store.entriesForMonth(oct), hasLength(12));
+      expect(find.text('Entry removed'), findsOneWidget);
+      // What a restart would load from the same store.
+      final restarted = await loadLedgerStart(app.store, oct5);
+      expect(restarted.entries.map((e) => e.id), isNot(contains(entry.id)));
+      expect(restarted.frequentAmountsMinor, isNot(contains(rupees(250))));
+    });
+
+    testWidgets('the entry goes from the screen only once it is deleted', (
+      tester,
+    ) async {
+      final (app, store) = await pumpGated(tester);
+      await app.log('250', 'food');
+      final entry = app.entries.last;
+
+      store.hold();
+      await tester.tap(undo);
+      await tester.pump();
+      // A second tap while the first is in flight.
+      await tester.tap(undo, warnIfMissed: false);
+      await app.settle();
+      expect(store.deletes, 1);
+      expect(app.entries, contains(entry));
+      expect(app.snapshot.remainingMinor, rupees(13351));
+      expect(find.text('Entry removed'), findsNothing);
+
+      store.release();
+      await app.settle();
+      expect(store.deletes, 1);
+      expect(app.entries, isNot(contains(entry)));
+      expect(app.snapshot.remainingMinor, rupees(13601));
+      expect(find.text('Entry removed'), findsOneWidget);
+    });
+
+    testWidgets('a delete that fails leaves the entry and says so', (
+      tester,
+    ) async {
+      final (app, store) = await pumpGated(tester);
+      await app.log('250', 'food');
+      final entry = app.entries.last;
+
+      store.failOnDelete = true;
+      await app.undo();
+
+      expect(app.entries, contains(entry));
+      expect(await store.entriesForMonth(oct), contains(entry));
+      expect(app.snapshot.remainingMinor, rupees(13351));
+      expect(find.text('Entry removed'), findsNothing);
+      expect(find.text(undoFailedMessage), findsOneWidget);
+      expect(
+        containerOf(tester).read(timingsProvider).single.entryId,
+        entry.id,
+      );
+
+      // Undo is still offered, and works once the store does.
+      expect(undo, findsOneWidget);
+      store.failOnDelete = false;
+      await app.undo();
+      expect(app.entries, isNot(contains(entry)));
+      expect(await store.entriesForMonth(oct), hasLength(12));
+      expect(app.snapshot.remainingMinor, rupees(13601));
+      expect(find.text('Entry removed'), findsOneWidget);
+      expect(containerOf(tester).read(timingsProvider), isEmpty);
     });
   });
 

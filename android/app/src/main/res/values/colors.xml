@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TideColors.ink in lib/theme/tide_theme.dart. The window shows it
+         while the ledger is opened and read, before Flutter's first frame. -->
+    <color name="tide_ink">#0E1420</color>
+</resources>

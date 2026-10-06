@@ -13,6 +13,8 @@ import 'package:tide/log/log_flow.dart';
 import 'package:tide/log/number_pad.dart';
 import 'package:tide/state/budget_state.dart';
 import 'package:tide/state/haptics.dart';
+import 'package:tide/state/ledger.dart';
+import 'package:tide/storage/storage.dart';
 
 import 'pump_home.dart';
 
@@ -57,6 +59,9 @@ class LogHarness {
   BudgetSnapshot get snapshot =>
       containerOf(tester).read(budgetSnapshotProvider);
   bool get isOpen => containerOf(tester).read(logFlowOpenProvider);
+
+  /// The ledger the app is running on.
+  LedgerStore get store => containerOf(tester).read(ledgerStoreProvider);
 
   /// Lets the enter or exit animation finish.
   Future<void> settle() => pumpFor(tester, const Duration(milliseconds: 320));
@@ -150,6 +155,7 @@ Future<LogHarness> pumpLogApp(
   double textScale = 1,
   bool still = false,
   DateTime? start,
+  LedgerStore? store,
   List<Override> overrides = const [],
 }) async {
   final clock = TestClock(start);
@@ -161,6 +167,7 @@ Future<LogHarness> pumpLogApp(
     textScale: textScale,
     still: still,
     logFlowBuilder: _logFlow,
+    store: store,
     overrides: [hapticsProvider.overrideWithValue(haptics), ...overrides],
   );
   expect(find.byType(HomeScreen), findsOneWidget);

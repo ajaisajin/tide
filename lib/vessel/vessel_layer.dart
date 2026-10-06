@@ -38,7 +38,11 @@ String vesselSemanticSummary(BudgetSnapshot s) {
 /// moves without this widget rebuilding. This widget rebuilds only when the
 /// budget snapshot, the still-water flag or the layout changes.
 class VesselLayer extends ConsumerStatefulWidget {
-  const VesselLayer({super.key});
+  const VesselLayer({super.key, this.onBudgetTap});
+
+  /// Called when the budget line ("left of ₹30,000") is tapped. The line is
+  /// a button only when this is given.
+  final VoidCallback? onBudgetTap;
 
   /// The `CustomPaint` that draws the liquid. Its painter is a
   /// [VesselPainter]: `tester.widget<CustomPaint>(find.byKey(...)).painter`.
@@ -49,6 +53,13 @@ class VesselLayer extends ConsumerStatefulWidget {
 
   /// The block of figures at the top; the liquid never rises into it.
   static const figuresKey = ValueKey<String>('vessel-figures');
+
+  /// The budget line under the remaining amount: the button that opens the
+  /// budget screen.
+  static const budgetLineKey = ValueKey<String>('vessel-budget-line');
+
+  /// What a screen reader calls the budget line.
+  static const budgetLineLabel = 'Change the budget';
 
   /// The debug-only frame-rate readout.
   static const frameRateKey = ValueKey<String>('vessel-frame-rate');
@@ -304,6 +315,7 @@ class _VesselLayerState extends ConsumerState<VesselLayer>
                                         child: _Figures(
                                           snapshot: snapshot,
                                           duration: duration,
+                                          onBudgetTap: widget.onBudgetTap,
                                         ),
                                       ),
                                     ),
@@ -343,10 +355,15 @@ class _VesselLayerState extends ConsumerState<VesselLayer>
 /// The always-visible figures: month and mood, the remaining amount, what it
 /// is left of, how full the vessel is, and what is safe to spend today.
 class _Figures extends StatelessWidget {
-  const _Figures({required this.snapshot, required this.duration});
+  const _Figures({
+    required this.snapshot,
+    required this.duration,
+    required this.onBudgetTap,
+  });
 
   final BudgetSnapshot snapshot;
   final Duration duration;
+  final VoidCallback? onBudgetTap;
 
   @override
   Widget build(BuildContext context) {
@@ -357,16 +374,44 @@ class _Figures extends StatelessWidget {
       context,
     ).clamp(maxScaleFactor: 1.35);
 
+    // The gaps above and below the budget line are inside it, so that it is
+    // a taller thing to tap without the figures taking any more room.
+    final budgetLine = Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 14),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 2,
+        children: [
+          Text(
+            s.isOverspent
+                ? 'over your ${formatRupees(s.availableMinor)}'
+                : 'left of ${formatRupees(s.availableMinor)}',
+            // Underlined where it can be tapped.
+            style: onBudgetTap == null
+                ? TideText.sub
+                : TideText.sub.copyWith(
+                    decoration: TextDecoration.underline,
+                    decorationColor: TideColors.muted,
+                  ),
+          ),
+          dot,
+          Text('${s.fillPercent}% full', style: TideText.sub),
+        ],
+      ),
+    );
+
+    // The summary says every figure, so only the budget line's button is
+    // left for a screen reader to find inside it.
     return Semantics(
       container: true,
       label: vesselSemanticSummary(s),
-      child: ExcludeSemantics(
-        child: Column(
-          key: VesselLayer.figuresKey,
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
+      child: Column(
+        key: VesselLayer.figuresKey,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ExcludeSemantics(
+            child: Wrap(
               spacing: 7,
               runSpacing: 2,
               children: [
@@ -375,8 +420,10 @@ class _Figures extends StatelessWidget {
                 CapsText(s.moodLabel, style: TideText.eyebrow),
               ],
             ),
-            const SizedBox(height: 8),
-            FittedBox(
+          ),
+          const SizedBox(height: 8),
+          ExcludeSemantics(
+            child: FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: AnimatedDefaultTextStyle(
@@ -395,23 +442,25 @@ class _Figures extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 2,
-              children: [
-                Text(
-                  s.isOverspent
-                      ? 'over your ${formatRupees(s.availableMinor)}'
-                      : 'left of ${formatRupees(s.availableMinor)}',
-                  style: TideText.sub,
-                ),
-                dot,
-                Text('${s.fillPercent}% full', style: TideText.sub),
-              ],
+          ),
+          if (onBudgetTap == null)
+            ExcludeSemantics(child: budgetLine)
+          else
+            Semantics(
+              key: VesselLayer.budgetLineKey,
+              container: true,
+              button: true,
+              onTap: onBudgetTap,
+              label: VesselLayer.budgetLineLabel,
+              excludeSemantics: true,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onBudgetTap,
+                child: budgetLine,
+              ),
             ),
-            const SizedBox(height: 14),
-            AnimatedContainer(
+          ExcludeSemantics(
+            child: AnimatedContainer(
               duration: duration,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -424,8 +473,8 @@ class _Figures extends StatelessWidget {
                 style: TideText.chip,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
