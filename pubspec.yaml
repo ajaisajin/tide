@@ -36,6 +36,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.4.3
   sensors_plus: ^7.1.1
+  drift: ^2.35.1
+  sqlite3: ^3.5.2
+  flutter_secure_storage: ^11.2.0
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:
@@ -47,6 +51,18 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  integration_test:
+    sdk: flutter
+  drift_dev: ^2.35.1
+  build_runner: ^2.15.1
+
+# Native SQLite build used by package:sqlite3 (and so by Drift). `sqlite3mc`
+# is SQLite3 Multiple Ciphers, which adds encryption. The cipher itself is
+# chosen at run time when the database is opened; see "Storage" in README.md.
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

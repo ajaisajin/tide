@@ -356,7 +356,7 @@ void main() {
       await pumpHome(tester);
       final motion = liquidMotion(tester);
       final before = motion.height;
-      final entry = budget(
+      final entry = await budget(
         tester,
       ).addExpense(amountMinor: rupees(3000), categoryId: 'bills');
       await pumpFor(tester, const Duration(milliseconds: 1200));

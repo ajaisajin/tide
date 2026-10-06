@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12 and later draw their own launch screen, by default the
+         app icon on the theme's background. Tide's is the ink background
+         with no icon. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenBackground">@color/tide_ink</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/launch_no_icon</item>
+    </style>
+</resources>

@@ -2,7 +2,17 @@
     <application
         android:label="tide"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/full_backup_content"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+        <!-- Tide's saved data never leaves the device: the key that opens it
+             is in the Android Keystore and cannot be backed up or moved.
+             allowBackup="false" turns off cloud backup and adb backup.
+             dataExtractionRules (Android 12 and later) also covers
+             device-to-device transfer, which allowBackup alone no longer
+             stops. fullBackupContent says the same for Android 11 and
+             earlier. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

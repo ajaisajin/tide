@@ -9,11 +9,16 @@ import 'package:tide/log/amount_ring.dart';
 import 'package:tide/log/log_flow.dart';
 import 'package:tide/log/number_pad.dart';
 import 'package:tide/log/ring_tracker.dart';
+import 'package:tide/home/confirmation_toast.dart';
+import 'package:tide/home/log_flow_state.dart';
+import 'package:tide/state/ledger.dart';
 import 'package:tide/state/log_session_state.dart';
 import 'package:tide/state/seed.dart';
 import 'package:tide/state/timing_state.dart';
+import 'package:tide/storage/storage.dart';
 import 'package:tide/theme/tide_theme.dart';
 
+import '../support/gated_ledger_store.dart';
 import '../support/log_helpers.dart';
 import '../support/pump_home.dart';
 
@@ -344,6 +349,44 @@ void main() {
       expect(find.byKey(LogFlow.chipKey(rupees(280))), findsNothing);
     });
 
+    testWidgets('the chips are the frequent amounts of the store over every '
+        'month, and an amount that becomes the most frequent moves first '
+        'after filing', (tester) async {
+      // ₹75 twice in September: counted, though September is not on show.
+      final store = MemoryLedgerStore.sampleMonth(oct5);
+      for (var i = 0; i < 2; i++) {
+        await store.insertEntry(
+          Entry(
+            id: 'sep-$i',
+            type: EntryType.expense,
+            amountMinor: rupees(75),
+            categoryId: 'food',
+            occurredAt: DateTime(2026, 9, 10 + i),
+          ),
+        );
+      }
+      final app = await pumpLogApp(tester, store: store);
+      List<int> chips() => containerOf(tester).read(frequentAmountsProvider);
+      double left(int r) =>
+          tester.getTopLeft(find.byKey(LogFlow.chipKey(rupees(r)))).dx;
+
+      expect(app.entries, hasLength(12));
+      expect(chips(), await store.frequentExpenseAmounts());
+      await app.open();
+      expect(chips().first, rupees(75));
+      expect(left(75), lessThan(left(180)));
+
+      // ₹180 is in the sample month once. Filing it twice makes it three.
+      await app.type('180');
+      await app.tapPebble('food');
+      await app.log('180', 'travel');
+      expect(chips(), await store.frequentExpenseAmounts());
+      expect(chips().take(2), [rupees(180), rupees(75)]);
+
+      await app.open();
+      expect(left(180), lessThan(left(75)));
+    });
+
     testWidgets('chips are at least 44 tall', (tester) async {
       final app = await pumpLogApp(tester);
       await app.open();
@@ -351,6 +394,193 @@ void main() {
         tester.getSize(find.byKey(LogFlow.chipKey(rupees(650)))).height,
         greaterThanOrEqualTo(44),
       );
+    });
+  });
+
+  group('saving', () {
+    Future<(LogHarness, GatedLedgerStore)> pumpGated(
+      WidgetTester tester,
+    ) async {
+      final store = GatedLedgerStore(
+        inner: MemoryLedgerStore.sampleMonth(oct5),
+      );
+      return (await pumpLogApp(tester, store: store), store);
+    }
+
+    final toast = find.byKey(ConfirmationToast.toastKey);
+    String message(WidgetTester tester) =>
+        tester.widget<Text>(find.byKey(LogFlow.messageKey)).data!;
+    Future<List<Entry>> saved(LogHarness app) =>
+        app.store.entriesForMonth(const YearMonth(2026, 10));
+
+    testWidgets('the flow closes and confirms only once the entry is saved', (
+      tester,
+    ) async {
+      final (app, store) = await pumpGated(tester);
+      await app.open();
+      await app.type('250');
+
+      store.hold();
+      await app.tapPebble('food');
+      expect(store.inserts, 1);
+      expect(app.isOpen, isTrue);
+      expect(find.byType(LogFlow), findsOneWidget);
+      expect(toast, findsNothing);
+      expect(app.entries, hasLength(12));
+      expect(app.snapshot.remainingMinor, rupees(13601));
+      expect(app.haptics.count('success'), 0);
+
+      store.release();
+      await app.settle();
+      expect(app.isOpen, isFalse);
+      expect(find.byType(LogFlow), findsNothing);
+      expect(find.textContaining('Logged ₹250 to Food'), findsOneWidget);
+      expect(app.snapshot.remainingMinor, rupees(13351));
+      expect(app.haptics.count('success'), 1);
+      expect(await saved(app), contains(app.entries.last));
+    });
+
+    testWidgets('a save that fails records nothing: no confirmation, the '
+        'figures unchanged, a message, and the flow still showing ₹250', (
+      tester,
+    ) async {
+      final (app, store) = await pumpGated(tester);
+      final before = app.snapshot;
+      await app.open();
+      await app.type('250');
+
+      store.failOnInsert = true;
+      await app.tapPebble('food');
+
+      expect(toast, findsNothing);
+      expect(find.textContaining('Logged'), findsNothing);
+      expect(app.snapshot, before);
+      expect(app.entries, hasLength(12));
+      expect(await saved(app), hasLength(12));
+      expect(containerOf(tester).read(timingsProvider), isEmpty);
+      expect(app.isOpen, isTrue);
+      expect(find.byType(LogFlow), findsOneWidget);
+      expect(app.amountText, '₹250');
+      expect(message(tester), LogFlow.saveFailedMessage);
+      expect(message(tester), contains('could not be saved'));
+      expect(app.haptics.count('success'), 0);
+      expect(app.haptics.count('refused'), 1);
+
+      // Nothing is stuck: once the store works, the same tap files it.
+      store.failOnInsert = false;
+      await app.tapPebble('food');
+      expect(app.isOpen, isFalse);
+      expect(find.textContaining('Logged ₹250 to Food'), findsOneWidget);
+      expect(app.snapshot.remainingMinor, rupees(13351));
+      expect(await saved(app), hasLength(13));
+    });
+
+    testWidgets('income that cannot be saved is not added either', (
+      tester,
+    ) async {
+      final (app, store) = await pumpGated(tester);
+      await app.open();
+      await tester.tap(find.byKey(LogFlow.incomeKey));
+      await tester.pump();
+      await app.type('5000');
+
+      store.failOnInsert = true;
+      await app.tapSource('Freelance');
+
+      expect(toast, findsNothing);
+      expect(app.snapshot.availableMinor, rupees(30000));
+      expect(app.isOpen, isTrue);
+      expect(app.amountText, '₹5,000');
+      expect(message(tester), LogFlow.saveFailedMessage);
+    });
+
+    testWidgets('the message goes when the amount is changed', (tester) async {
+      final (app, store) = await pumpGated(tester);
+      await app.open();
+      await app.type('250');
+      store.failOnInsert = true;
+      await app.tapPebble('food');
+      expect(message(tester), LogFlow.saveFailedMessage);
+
+      await app.type('0');
+      expect(app.amountText, '₹2,500');
+      expect(message(tester), 'Tap a pebble to file it');
+    });
+
+    testWidgets('a double tap records one entry', (tester) async {
+      final app = await pumpLogApp(tester);
+      await app.open();
+      await app.type('250');
+
+      final pebble = find.byKey(LogFlow.pebbleKey('food'));
+      await tester.tap(pebble);
+      await tester.tap(pebble, warnIfMissed: false);
+      await app.settle();
+
+      expect(app.entries, hasLength(13));
+      expect(await saved(app), hasLength(13));
+      expect(app.snapshot.remainingMinor, rupees(13351));
+      expect(app.haptics.count('success'), 1);
+      expect(containerOf(tester).read(timingsProvider), hasLength(1));
+    });
+
+    testWidgets('taps are ignored while a save is in flight', (tester) async {
+      final (app, store) = await pumpGated(tester);
+      await app.open();
+      await app.type('250');
+
+      store.hold();
+      await tester.tap(find.byKey(LogFlow.pebbleKey('food')));
+      // Before a frame, and after one.
+      await tester.tap(
+        find.byKey(LogFlow.pebbleKey('bills')),
+        warnIfMissed: false,
+      );
+      await tester.pump();
+      for (final key in [
+        LogFlow.pebbleKey('food'),
+        LogFlow.pebbleKey('travel'),
+        NumberPad.digitKey(9),
+        LogFlow.chipKey(rupees(650)),
+        LogFlow.incomeKey,
+      ]) {
+        await tester.tap(find.byKey(key), warnIfMissed: false);
+        await tester.pump();
+      }
+      expect(store.inserts, 1);
+      expect(app.amountText, '₹250');
+      expect(find.byKey(LogFlow.pebbleKey('food')), findsOneWidget);
+
+      store.release();
+      await app.settle();
+      expect(store.inserts, 1);
+      expect(app.entries, hasLength(13));
+      expect(app.entries.last.amountMinor, rupees(250));
+      expect(app.entries.last.categoryId, 'food');
+      expect(find.textContaining('Logged ₹250 to Food'), findsOneWidget);
+    });
+
+    testWidgets('if the flow was closed before a save failed, the home '
+        'screen says so', (tester) async {
+      final (app, store) = await pumpGated(tester);
+      await app.open();
+      await app.type('250');
+
+      store.hold();
+      await tester.tap(find.byKey(LogFlow.pebbleKey('food')));
+      await tester.pump();
+      // The system back button.
+      containerOf(tester).read(logFlowOpenProvider.notifier).close();
+      await app.settle();
+      expect(find.byType(LogFlow), findsNothing);
+
+      store.failOnInsert = true;
+      store.release();
+      await app.settle();
+      expect(find.text(LogFlow.saveFailedNotice), findsOneWidget);
+      expect(find.byKey(ConfirmationToast.undoKey), findsNothing);
+      expect(app.entries, hasLength(12));
+      expect(app.snapshot.remainingMinor, rupees(13601));
     });
   });
 

@@ -5,6 +5,8 @@ import 'package:tide/log/timing.dart';
 import 'package:tide/state/budget_state.dart';
 import 'package:tide/state/timing_state.dart';
 
+import '../support/ledger_container.dart';
+
 Duration secs(double s) => Duration(milliseconds: (s * 1000).round());
 
 TimingRecord rec(String id, AmountMethod m, double s) =>
@@ -78,9 +80,8 @@ void main() {
       expect(s.overall, TimingStat(count: 3, median: secs(2.6)));
     });
 
-    test('clearing zeroes every count and leaves entries alone', () {
-      final c = ProviderContainer();
-      addTearDown(c.dispose);
+    test('clearing zeroes every count and leaves entries alone', () async {
+      final c = await ledgerContainer(now: DateTime(2026, 10, 5, 10));
       final entries = c.read(budgetProvider).entries;
       scenario.forEach(c.read(timingsProvider.notifier).add);
       c.read(timingsProvider.notifier).clear();

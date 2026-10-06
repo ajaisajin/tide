@@ -1,0 +1,14 @@
+# Options for Drift's code generator and its schema tools.
+#
+# `databases` names the database for `dart run drift_dev make-migrations`,
+# which writes a snapshot of each schema version to `drift_schemas/` and, once
+# there is a second version, migration tests to `test/drift/`.
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          databases:
+            tide: lib/storage/drift/tide_database.dart
+          schema_dir: drift_schemas/
+          test_dir: test/drift/
